@@ -1,0 +1,446 @@
+---
+title: "Experiment"
+subtitle: "Export regression models to Microsoft Excel"
+author: "Matthew Nimmo"
+date: '2022-02-02'
+---
+
+# Project Definition
+
+## Overview
+
+Building geometallurgy models generally involves adding estimates of geotechnical (rock hardness) and metallurgy parameters (comminution and flotation or leaching results) to an existing geology block model. The estimates are derived from the available geology information that exists in the block model such as lithology, alteration and assays.
+
+The primary goal of geometallurgy modelling is to build the highest accuracy model that can be achieved as interpretability of the resulting models is not a priority. To achieve high accuracy it usually requires complex regression and classification models. Unfortunately, there is usually also a need for the trained regression and classification models to be used for other purposes such as for mine planning. This will require the models to be deployed in an environment that may not be R.
+
+The most common environment is Microsoft Excel or as a script to be used in Datamine Studio.
+
+While building the machine learned model it is important to keep in mind how the model will be used and what environment the model needs to be deployed in. The deployment environment will dictate the level of complexity and type of model that is built for classification and regression. If the deployment environment is not considered during model building then deploying the model could become very difficult to achieve. For this reason standard multivariate linear regression or multivariate adaptive regression splines are the most common regression technique used for modelling geotechnical and geometallurgy parameters. These are what metallurgists and mining engineers are used to using and they expect to see these models. But these models tend to be the worst.
+
+For simple linear regression models deploying the model can be very easy as there is only one equation that typically has a small number of terms. These models can be easily summarised (printed out) and interpreted. Interpretability and ease of use are two main reasons for using a simple linear regression.
+
+Simple decision trees for classification can also be easily interpreted and easily deployed with little effort. However, decision trees are known to be unstable (different models can be produced from different parts of the data). The high variance produced from decision trees is a exploited by ensemble learning (combining multiple models). Random forests is an (bagged) ensemble decision tree technique that could have hundreds or thousands of individual decision trees each of which could be complex. A random forest is not a practical choice for classification or regression for geometallurgy.
+
+The Cubist algorithm is a (boosted) ensemble that combines a decision tree with linear regression. The cubist algorithm is routinely superior for predicting geometallurgy response variables such as grind size, metal recovery and mass pull. The cubist model is far more complex than simple linear regression and far less complex than a random forest. A cubist model is a collection of rules (if condition the outcome) which can be interpreted and be easily deployed. However, the time and effort required to deploy a cubist model is substantial and far more involved than simple linear regression.
+
+More often than not the regression and classification models will need to be deployed to Microsoft Excel. Metallurgists and mining engineers use Excel extensively and usually expect an Excel tool for predicting metallurgy parameters.
+
+The easiest way to deploy the model in Excel is by developing a set of Visual Basic for Applications (VBA) functions that can be called from within the spreadsheet. Deploying to Microsoft Excel was a manual process which can take a long time for complex cubist models. The manual coding of the rules as VBA functions can be prone to errors which are difficult to track down. This experiment looks at a method of automating the process of exporting the cubist and rpart (recursive partitioning and regression tree) regression and classification models as VBA functions for including in an Excel spreadsheet.
+
+## Problem statement
+
+Having built a geometallurgical classification or regression model it is necessary to deploy that model to Microsoft Excel.
+
+For simple linear regression models it is relatively easy to code a single equation as a single VBA function. But for complex models such as the cubist algorithm it is not easy. Exporting a cubist regression model to VBA can take several days to complete. If the model needs to be updated or changed then several more days will be needed to make the changes.
+
+Manual coding of the cubist regression model into VBA is wasted time when an automated method could be developed that would allow exporting the model in a matter of minutes not days.
+
+This experiment involves the following tasks:
+
+1. Export a geometallurgical cubist regression model and decision tree classification model to Excel as VBA code.
+
+2. Check the VBA code results in estimates that are the same as R. Make any corrections to the code as needed to remove any miss-matches.
+
+3. Use the manually constructed VBA code as template for automatic generation of the VBA code.
+
+4. Write R functions to convert the cubist and rpart models to VBA.
+
+5. Test the code by exporting a model to VBA and execute in Excel.
+
+Success will be determined by how well the export from R to VBA works in Excel and how quickly the export can be done compared to manual coding.
+
+# Methodology
+
+The classification and regression models built for a geometallurgy project were used for testing and benchmarking.
+
+The model consists of 16 separate regression models and one classification model. The classification model is a simple rpart model for identifying oretype. The regression models are cubist models that estimate mass pull, gold recovery, copper recovery and sulphur recovery for the copper and pyrite concentrate for regular ore and pyrite ore. The cubist regression models consist of a combined total of 287 rules.
+
+## Benchmark
+
+The 16 cubist regression models and one rpart classification model were manually exported from R to Microsoft Excel as VBA functions. The process involved copying the summary output for each model from R, inserting that into Microsoft Excel and then editing the summary to be proper VBA code. The process also involved substantial modifications to get the code to work.
+
+To export the models to Excel as VBA code required 48 hours of manual coding. This include 28 hours for initially coding the rules into VBA followed by 20 hours of testing and correcting the code and trying to fix differences between the results from the VBA code and the results from R.
+
+Issues in implementing the cubist models in Excel included:
+
+1. Typing errors.
+
+2. Applying the min-max extrapolation to the individual linear regressions incorrectly.
+
+3. Not including all min-max extrapolation restrictions in the VBA code that are used by the C code.
+
+3. Numeric precision issues. The C code used by R uses float numbers while Excel uses double. This resulted in different rules being executed by the VBA code compared with the C code. The problem was in evaluating the condition - a double numeric value may be slightly over the cut value in the condition but a truncated single numeric value may be equal to the condition.
+
+4. Differences between the actual model specification executed by R (stored in the model parameter in the R cubist object) and the summary (generated by summary function) of the rules that was exported. The main difference was in the numeric precision in the numbers used in the rule condition.
+
+Despite the effort of trying to replicate the cubist model in Microsoft Excel VBA there were still sizeable differences between the results in Excel compared to R.
+
+## Implementation
+
+The functions to export the cubist regression and rpart classification models from R to Microsoft Excel were implemented in R. The functions output a text file that contains valid VBA code - one function for each model.
+
+A couple of support functions were also written which are output to the VBA code. These are shown in the following listings.
+
+The first listing is a function to write the VBA \code{Avg()} function. This function averages the contents of an array. It requires that a value for a missing number be specified. This defaults to the minimum value for the single data type which is -3.402823E38. If a double is used then this should be -1E+99. However, any negative number could be used if the minimum value allowed in the array is 0. The default data type is single as this is more close to the C code used by the R implementation.
+
+```{r}
+# Single: -3.402823E38
+# Double: -1E+99
+write_avg_func <- function(con, na.value="-3.402823E38") {
+  txt <- list()
+  txt[1] <- "Function Avg(x() As Single) As Double"
+  txt[2] <- "\tDim y As Double"
+  txt[3] <- "\tDim n As Integer"
+  txt[4] <- "\tFor i = 1 To UBound(x)"
+  txt[5] <- paste("\tIf x(i) >", na.value, "Then")
+  txt[6] <- "\t\ty = y + x(i)"
+  txt[7] <- "\t\tn = n + 1"
+  txt[8] <- "\tEnd If"
+  txt[9] <- "\tNext"
+  txt[10] <- "\ty = y / n"
+  txt[11] <- "\tAvg = y"
+  txt[12] <- "End Function"
+
+  lapply(txt, writeLines, con)
+  writeLines("", con)
+}
+```
+
+The second support function is a function to write the VBA \code{MinMax()} function. This function is used to limit the extrapolation of a linear equation. Extrapolating a linear function beyond the range of the data is risky. The cubist algorithm controls the amount of extrapolation through the extrapolation parameter, a value between 0 and 100. Note that in R the value is specified as a percent while in VBA it is specified as a value between 0 and 1 which is the way it is specified by the cubist C code. A value of 1 allows extrapolation above the maximum and below the minimum by the range (maximum - minimum) multiplied by extrapolation. A value of 0 clips the value to the minimum or maximum. In the cubist algorithm if all the data is above 0 then the minimum is 0, if all the data is below 0 then the maximum is 0. In the VBA code the extrapolation can be further clamped to clip at 100 when dealing with percent such as metal recovery.
+
+```{r}
+write_minmax_func <- function(con) {
+  txt <- list()
+  txt[1] <- "Function MinMax(x As Single, min As Single, max As Single, Optional extrap As Single = 1) As Single"
+  txt[2] <- "\tDim r As Single"
+  txt[3] <- "\tDim ub As Single"
+  txt[4] <- "\tDim lb As Single"
+  txt[5] <- "\tr = extrap * (max - min)"
+  txt[6] <- "\tub = max + r"
+  txt[7] <- "\tIf ub > 100 Then"
+  txt[8] <- "\t\tub = 100"
+  txt[9] <- "\tEnd If"
+  txt[10] <- "\tlb = min - r"
+  txt[11] <- "\tIf lb < 0 Then"
+  txt[12] <- "\t\tlb = 0"
+  txt[13] <- "\tEnd If"
+  txt[14] <- "\tMinMax = x"
+  txt[15] <- "\tIf x < lb Then"
+  txt[16] <- "\t\tMinMax = lb"
+  txt[17] <- "\tEnd If"
+  txt[18] <- "\tIf x > ub Then"
+  txt[19] <- "\t\tMinMax = ub"
+  txt[20] <- "\tEnd If"
+  txt[21] <- "End Function"
+
+  lapply(txt, writeLines, con)
+  writeLines("", con)
+}
+```
+
+The last support function is \code{locf()}. This function simply fills in missing values using last one carried forward method. The function is used by \code{export_vba.cubist()} for grouping the text describing the model definition by model.
+
+```{r}
+locf <- function(x, blank=is.na) {
+  # Find the values
+  if (is.function(blank)) {
+    isnotblank <- !blank(x)
+  } else {
+    isnotblank <- x != blank 
+  }
+  # Fill down
+  y <- x[which(isnotblank)][cumsum(isnotblank)]
+  
+  return(y)
+}
+```
+
+In R we can use the class of the first variable in the function list to determine which version of the function to use. If a list is passed in as the first argument then \code{function.list()} is called. If a cubist or rpart model is passed then the functions \code{function.cubist()} or \code{function.rpart()} are called respectively. By using this facility it is possible to build a number of export functions to output R models to VBA.
+
+```{r}
+export_vba <- function(model, ...) UseMethod('export_vba')
+```
+
+The default function, which is executed when an object other than rpart or cubist is passed in, has not yet been specified. This does not cause any problems with running the export function. However, only an rpart or cubist model should be passed into the function.
+
+```{r}
+export_vba.default <- function(model)
+{
+}
+```
+
+The function \code{export_vba.cubist)} exports an cubist regression model to VBA code. The function requires either an open connection (file) or the name of a file. If the file name is passed then a file connection is opened and only the VBA code to export an rpart model is written to the connection. Specifying no connection will result in the VBA code being printed to the R console. The parameter \code{funcname} defines the name of the VBA function that will be used for the model. The specification for the model is obtained by from \code{model$model}.
+
+```{r}
+export_vba.cubist <- function(model, funcname, con=stdout(), na.value="-3.402823E38") {
+  if (is.character(con)) {
+    con <- file(con, open="wt")
+    write_minmax_func(con)
+    write_avg_func(con)
+  }
+
+  txt <- model$model
+  txt <- gsub("([[:alpha:]])[.]", "\\1_", txt)
+  txt <- unlist(strsplit(gsub("\\\"", "", txt), "\n"))
+
+  x <- unlist(strsplit(txt[2], " "))
+  eval(parse(text=x))
+
+  txt <- txt[-(1:3)]
+
+  x <- paste0("Function ", funcname, "(")
+  z <- txt[grepl("^att", txt)]
+  z <- strsplit(z, " ")
+  FIRST <- TRUE
+  for (i in z) {
+    if (grepl("weight", i[2])) {
+      next()
+    }
+    if (FIRST) {
+      FIRST <- FALSE
+    } else {
+      x <- paste0(x, ", ")
+    }
+    if (grepl("mode", i[2])) {
+      x <- paste0(x, gsub("[.]", "_", gsub("att=", "head_", i[1])), " As String")
+    }
+    if (grepl("mean", i[2])) {
+      x <- paste0(x, gsub("[.]", "_", gsub("att=", "head_", i[1])), " As Single")
+    }
+  }
+  x <- paste0(x, ") As Double")
+  writeLines(x, con=con)
+
+  txt <- txt[!grepl("^att", txt)]
+  txt <- txt[!grepl("^redn", txt)]
+
+  z <- txt[grepl("^rules", txt)]
+  z <- gsub("rules=", "", z)
+  n.rules <- sum(as.numeric(z))
+
+  writeLines("\tDim y As Single", con=con)
+  writeLines(paste0("\tDim u(1 To ", n.rules, ") As Single"), con=con)
+  writeLines(paste("For i = 1 To", n.rules))
+  writeLines(paste("u(i) =", na.value))
+  writeLines("Next")
+  writeLines("", con=con)
+
+  indx <- rep(NA, length(txt))
+  i <- grepl("^rules", txt)
+  indx[i] <- 1:sum(i)
+  indx <- locf(indx)
+  z <- split(txt, indx)
+  i <- 0
+  k <- 0
+  FIRST <- TRUE
+  for (m in z) {
+    if (FIRST) {
+      FIRST <- FALSE
+    } else {
+      writeLines("", con=con)
+    }
+    i <- i + 1
+    writeLines(paste("\t'Model", i), con=con)
+    j <- 0
+    SECOND <- FALSE
+    HAS.COND <- FALSE
+    x <- ""
+    for (r in m) {
+      if (grepl("^conds", r)) {
+        j <- j + 1
+        eval(parse(text=unlist(strsplit(r, " "))))
+        HAS.COND <- ifelse(conds > 0, TRUE, FALSE)
+        if (HAS.COND) {
+          x <- "\tIf "
+        }
+        writeLines(paste0("\t'Rule ", i, "/", j, ": [",
+                          gsub("^conds=[[:digit:]]* ","",r), "]"), con=con)
+      }
+      if (grepl("^type", r)) {
+        if (!SECOND) {
+          SECOND <- TRUE
+        } else {
+          x <- paste(x, "And ")
+        }
+        if (grepl("^type=2", r)) {
+          y <- unlist(strsplit(r, " "))
+          x <- paste0(x, gsub("att=","head_", y[grepl("att",y)]))
+          x <- paste(x, gsub("result=","", y[grepl("result",y)]))
+          x <- paste(x, gsub("cut=","", y[grepl("cut",y)]))
+        }
+        if (grepl("^type=3", r)) {
+          y <- unlist(strsplit(r, " "))
+          att <- paste0(gsub("att=", "head_", y[grepl("att",y)]), "=\"")
+          z <- gsub("elts=",  att, y[grepl("elts",y)])
+          z <- gsub(",", paste("\" Or ", att), z)
+          x <- paste0(x, " (", z, ")")
+        }
+      }
+      if (grepl("^coef", r)) {
+        k <- k + 1
+        y <- unlist(strsplit(r, " "))
+        y <- gsub("att=", "* head_", gsub("coeff=", "+ ", y))
+        y <- paste(rev(y), collapse=" ")
+        y <- gsub("^[+] ", "", y)
+        y <- gsub("[+] [-]", "- ", y)
+        y <- paste("y = ", y)
+
+        if (HAS.COND) {
+          x <- paste(x, "Then")
+          writeLines(x, con=con)
+          y <- paste0("\t\t", y)
+          writeLines(y, con=con)
+          writeLines(paste0("\t\ty = MinMax(y, ", loval, ", ",
+                            hival, ", ", extrap, ")"), con=con)
+          writeLines(paste0("\t\tu(", k, ") = y"), con=con)
+          writeLines("\tEnd If", con=con)
+        } else {
+          y <- paste0("\t", y)
+          writeLines(y, con=con)
+          writeLines(paste0("\ty = MinMax(y, ", loval, ", ",
+                            hival, ", ", extrap, ")"), con=con)
+          writeLines(paste0("\tu(", k, ") = y"), con=con)
+        }
+        SECOND <- FALSE
+      }
+    }
+  }
+  writeLines("", con=con)
+
+  floor <- ifelse(floor < 0, 0, floor)
+  ceiling <- ifelse(ceiling > 100, 100, ceiling)
+  writeLines(paste0("\t", funcname, " = MinMax(Avg(u), ",
+                    floor, ", ", ceiling, ", ", extrap, ")"), con=con)
+  writeLines("End Function", con=con)
+  writeLines("", con=con)
+
+  if (is.character(con)) {
+    close(con)
+  }
+}
+```
+
+The function \code{export_vba.rpart)} exports an rpart classification model to VBA code. The function requires either an open connection (file) or the name of a file. If the file name is passed then a file connection is opened and only the VBA code to export an rpart model is written to the connection. Specifying no connection will result in the VBA code being printed to the R console. The parameter \code{funcname} defines the name of the VBA function that will be used for the model. The specification for the model is obtained by \code{print(model)} with the output captured as text and then parsed into VBA.
+
+```{r}
+export_vba.rpart <- function(model, funcname, con=stdout()) {
+  if (is.character(con)) {
+    con <- file(con, open="wt")
+  }
+
+  txt <- capture.output(print(model))
+  txt <- txt[grepl("^ *[[:digit:]]*[)]", txt)]
+  lvl <- unlist(lapply(txt, function(x) {
+    nchar(x) - nchar(gsub("^[[:space:]]*","", x))})) / 2
+  txt <- gsub("[[:space:]]+", " ", txt)
+  txt <- gsub("^[[:space:]]+", "", txt)
+  txt <- gsub("([<>=]) ", "\\1", txt)
+  vars <- caret::predictors(model)
+  i <- sapply(vars, function(x) any(grepl(x, txt)))
+  vars <- vars[i]
+  type <- sapply(vars, function(x) {
+    any(grepl(paste0(x,"[><=]+[-]?[[:digit:]]"), txt))
+  })
+  x <- paste0("Function ", funcname, "(")
+  for (i in 1:length(vars)) {
+    if (i>1) {
+      x <- paste0(x, ", ")
+    }
+    x <- paste0(x, "head_", vars[i],
+                ifelse(type[i], " As Double", " As String"))
+  }
+  x <- paste0(x, ") As String")
+  writeLines(x, con)
+
+  writeLines(paste0("\tDim class As String"), con)
+
+  for (j in 1:length(txt)) {
+    node <- txt[j]
+    tab <- paste(rep("\t", lvl[j]), collapse="")
+    z <- unlist(strsplit(node, " "))
+
+    if (z[2] == "root") {
+      writeLines(paste0("\tclass = \"", z[5], "\""), con)
+    } else {
+      writeLines(paste0(tab, "If head_", z[2], " Then"), con)
+      if (j < length(txt) & lvl[j] < lvl[j+1]) {
+        writeLines(paste0(tab, "\tclass = \"", z[5], "\""), con)
+      } else {
+        writeLines(paste0(tab, "\tclass = \"", z[5], "\""), con)
+        writeLines(paste0(tab, "End If"), con)
+      }
+      if ((j < length(txt) & lvl[j] > lvl[j+1]) |
+          (j == length(txt) & lvl[j] > 1)) {
+        tab <- paste(rep("\t", lvl[j+1]), collapse="")
+        writeLines(paste0(tab, "End If"), con)
+      }
+    }
+  }
+
+  writeLines(paste0("\t", funcname, " = class"), con=con)
+  writeLines("End Function", con=con)
+  writeLines("", con=con)
+
+  if (is.character(con)) {
+    close(con)
+  }
+}
+```
+
+The function \code{export_vba.list()} allows exporting multiple models in one go. The function can only export an rpart or cubist model. Because of this, the R list should only containe either an rpart classification model or a cubist regression model. Any other objects stored in the list will call \code{export_vba.default()} which does nothing.
+
+```{r}
+export_vba.list <- function(model, con=stdout())
+{
+  if (is.character(con)) {
+    con <- file(con, open="wt")
+  }
+
+  write_minmax_func(con)
+  write_avg_func(con)
+
+  for (i in 1:length(model)) {
+    export_vba(model[[i]], names(model)[i], con)
+  }
+
+  if (is.character(con)) {
+    close(con)
+  }
+}
+```
+
+During conversion of the models to VBA the independent variable names in the models are changed by prefixing with \code{head_}. This is done to ensure that there is no clash between the variable names and VBA key words. For example, arsenic which is commonly abbreviated as As would be interpreted by VBA as the word As which is used to define data type. 
+
+# Results
+
+The export functions were tested by running them on the test models and copying the resulting code into Microsoft Excel where the functions are used for estimating values.
+
+The issue with matching the results between the VBA code and R still exist. Although the number of mismatches and the magnitude of those mismatches has been reduced. The reasons for the remaining mismatches is unclear and should be investigated further.
+
+```r
+export_vba(y)
+```
+
+# Conclusion
+
+The experiment to test how a cubist regression model could be implemented in Microsoft Excel and how long it would take was a success. Manually coding the models in VBA is possible but takes a very long time to complete and is prone to errors. An automated method was developed that replicated the manual process but ran in a fraction of the time.
+
+A cubist model can now be exported in a mater of seconds rather than in 3 to 5 days.
+
+There are still some issues with reproducing the R results. It is not known what is causing the discrepancies. Further testing needs to be conducted to determine what is causing the discrepancies and if the discrepancies can be removed.
+
+## Reflection
+
+Exporting a regression or classification model from R to Microsoft Excel is an important part of a geometallurgy data analytics project.
+
+Due to the variety of regression and classification techniques that can be used, the export process can be easy or very difficult. For the cubist algorithm the process is difficult and time consuming. Exporting a cubist model manually is not advised as it could take up to a week to complete and there is no guarantee that the Excel implementation will match the results from R. The manually coded version could also contain transcription errors which could render the model useless. And, if the model changes then the entire process would need to be redone costing significant time.
+
+The only option is an automated process.
+
+Luckily, the process of implementing the cubist model manually in Excel was structured. The manual coding of the model resulted in a template function that can be used for developing an automatic conversion function. Using the structured output of the definition of the cubist model and the structure of a rule defined in VBA, a conversion function was successfully developed which outputs valid VBA code that can be easily included in an Excel worksheet.
+
+Automation of the process for converting R models to VBA code can save 3 to 5 days of work per model export. This is a substantial saving of time and effort. The automation also eliminates any risk of typing and coversion errors from occuring.
+
+## Improvement
+
+So far only the cubist and rpart models have a conversion function. Functions should also be developed for the linear regression and the MOB (model based recursive partitioning) models as well as any other models that may be used in a geometallurgical data analytics study.
